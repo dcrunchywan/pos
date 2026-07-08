@@ -1,0 +1,390 @@
+function doGet() {
+  return HtmlService.createTemplateFromFile('index')
+      .evaluate()
+      .setTitle('D\'CrunchyWan POS')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL); //[cite: 4]
+}
+
+function getRealLastRow(sheet) {
+  if (!sheet) return 0;
+  var lastRow = sheet.getLastRow();
+  if (lastRow === 0) return 0;
+  var values = sheet.getRange(1, 1, lastRow, 1).getValues(); //[cite: 4]
+  for (var i = lastRow - 1; i >= 0; i--) {
+    if (values[i][0] !== "" && values[i][0] !== null) {
+      return i + 1; //[cite: 4]
+    }
+  }
+  return 1;
+}
+
+function ambilDaftarMenu() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Kasir"); //[cite: 4]
+    if (!sheet) return [];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    var data = sheet.getRange(2, 1, lastRow - 1, 7).getValues(); //[cite: 4]
+    var daftarMenu = [];
+
+    data.forEach(function(row) {
+      var namaMenu = row[1] ? row[1].toString().trim() : ""; //[cite: 4]
+      if (namaMenu !== "") { 
+        var c1 = row[3] ? row[3].toString().trim() : "Lainnya";
+        var c2 = row[4] ? row[4].toString().trim() : "";
+        daftarMenu.push({
+          item: namaMenu,
+          harga: Number(row[2]) || 0,
+          cat1: c1 === "" ? "Lainnya" : c1, //[cite: 4]
+          cat2: c2,
+          imageUrl: row[5] ? row[5].toString().trim() : ""
+        });
+      }
+    });
+    return daftarMenu; //[cite: 4]
+  } catch(e) { return []; }
+}
+
+function simpanData(dataArray) {
+  var lock = LockService.getScriptLock(); //[cite: 4]
+  try {
+    lock.waitLock(15000); //[cite: 4]
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetAyam = ss.getSheetByName("Transaksi"); //[cite: 4]
+    var sheetMamah = ss.getSheetByName("Transaksi Mamah"); //[cite: 4]
+    var sheetLogStok = ss.getSheetByName("Log_Stok_Ayam"); //[cite: 4]
+    
+    var daftarMenuGlobal = ambilDaftarMenu();
+    var waktuNota = new Date();
+    var tglWib = Utilities.formatDate(waktuNota, "Asia/Jakarta", "M/d/yyyy H:mm:ss"); //[cite: 4]
+
+    dataArray.forEach(function(row) { //[cite: 4]
+      var tglClean = row.tgl.split(',')[0].replace(/-/g, '/');
+      var parts = tglClean.split('/'); 
+      var tglMurni = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); //[cite: 4]
+      
+      var dataProduk = daftarMenuGlobal.find(function(m) {
+        return m.item.toLowerCase() === row.item.toLowerCase();
+      });
+      
+      var c1Murni = dataProduk ? dataProduk.cat1.toLowerCase() : "";
+      var hargaSatuan = dataProduk ? dataProduk.harga : 0; //[cite: 4]
+      var beneranMama = c1Murni.includes("mama") || c1Murni.includes("mamah"); //[cite: 4]
+      var targetSheet = beneranMama ? sheetMamah : sheetAyam; //[cite: 4]
+      
+      targetSheet.appendRow([
+        tglWib, row.item, row.qty, row.pembayaran, hargaSatuan, (dataProduk ? dataProduk.cat1 : "Lainnya"), row.wadah || "Takeout", row.diskonNilai || 0, row.diskonTipe || "Rp", "OK" //[cite: 4]
+      ]);
+
+      var itemNamaLower = row.item.toLowerCase();
+      if (itemNamaLower.indexOf("nutrisari") !== -1) {
+        potongStokBahanBakuKasir(ss, "Nutrisari Saset", row.qty); //[cite: 4]
+      } else if (itemNamaLower.indexOf("teh jus") !== -1) {
+        potongStokBahanBakuKasir(ss, "Teh Jus Saset", row.qty); //[cite: 4]
+      } else if (itemNamaLower.indexOf("kopi") !== -1) {
+        potongStokBahanBakuKasir(ss, "Kopi Saset", row.qty); //[cite: 4]
+      }
+
+      if (!beneranMama && (itemNamaLower.indexOf("ayam") !== -1 || itemNamaLower.indexOf("geprek") !== -1 || c1Murni.indexOf("ayam") !== -1 || c1Murni.indexOf("geprek") !== -1)) {
+        if (sheetLogStok) {
+          sheetLogStok.appendRow([tglMurni, "Penjualan Kasir", "Etalase", -Math.abs(row.qty), "Terjual: " + row.item]); //[cite: 4]
+        }
+      }
+    });
+    return "Sukses"; //[cite: 4]
+  } catch(e) { return "Error: " + e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+function potongStokBahanBakuKasir(ss, namaBarang, qtyJual) {
+  var sheetStok = ss.getSheetByName("Stok Barang");
+  if (!sheetStok) return;
+  var lastRow = sheetStok.getLastRow();
+  if (lastRow < 2) return; //[cite: 4]
+  var data = sheetStok.getRange(2, 1, lastRow - 1, 2).getValues(); //[cite: 4]
+  for (var i = 0; i < data.length; i++) { //[cite: 4]
+    if (data[i][0].toString().trim().toLowerCase() === namaBarang.toLowerCase()) {
+      var stokLama = Number(data[i][1]) || 0; //[cite: 4]
+      sheetStok.getRange(i + 2, 2).setValue(Math.max(0, stokLama - qtyJual)); //[cite: 4]
+      break;
+    }
+  }
+}
+
+function catatOpnameBarang(namaBarang, stokSistem, stokFisik, selisih) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000); //[cite: 4]
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetDraft = ss.getSheetByName("Draft_Opname"); //[cite: 4]
+    if (!sheetDraft) {
+      sheetDraft = ss.insertSheet("Draft_Opname"); //[cite: 4]
+      sheetDraft.appendRow(["ID Draft", "Tanggal Pengajuan", "Nama Barang", "Stok Sistem", "Stok Fisik Kasir", "Selisih", "Status Approval"]); //[cite: 4]
+    }
+    var idDraft = "DF-" + new Date().getTime(); //[cite: 4]
+    sheetDraft.appendRow([idDraft, new Date(), namaBarang, stokSistem, stokFisik, selisih, "PENDING"]); //[cite: 4]
+    return "Sukses"; //[cite: 4]
+  } catch(e) { return e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+function ambilDraftOpnamePending() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetDraft = ss.getSheetByName("Draft_Opname"); //[cite: 4]
+    if (!sheetDraft) return [];
+    var lastRow = sheetDraft.getLastRow();
+    if (lastRow < 2) return []; //[cite: 4]
+    var data = sheetDraft.getRange(2, 1, lastRow - 1, 7).getValues(); //[cite: 4]
+    var listPending = [];
+    data.forEach(function(row, index) { //[cite: 4]
+      if (row[6] === "PENDING") {
+        listPending.push({
+          rowNum: index + 2,
+          id: row[0],
+          nama: row[2],
+          sistem: Number(row[3]) || 0,
+          fisik: Number(row[4]) || 0,
+          selisih: Number(row[5]) || 0 //[cite: 4]
+        });
+      }
+    });
+    return listPending;
+  } catch(e) { return []; } //[cite: 4]
+}
+
+function eksekusiApproveDraftOwner(rowNum, namaBarang, stokFisik) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetDraft = ss.getSheetByName("Draft_Opname"); //[cite: 4]
+    if(sheetDraft) { sheetDraft.getRange(rowNum, 7).setValue("APPROVED"); } //[cite: 4]
+    var sheetStok = ss.getSheetByName("Stok Barang"); //[cite: 4]
+    if (sheetStok) { //[cite: 4]
+      var lastRowStok = sheetStok.getLastRow();
+      var dataStok = sheetStok.getRange(2, 1, lastRowStok - 1, 2).getValues(); //[cite: 4]
+      for (var i = 0; i < dataStok.length; i++) {
+        if (dataStok[i][0].toString().trim() === namaBarang.toString().trim()) {
+          sheetStok.getRange(i + 2, 2).setValue(stokFisik); //[cite: 4]
+          break; //[cite: 4]
+        }
+      }
+    }
+    var sheetLog = ss.getSheetByName("Log_Opname"); //[cite: 4]
+    if (sheetLog) { sheetLog.appendRow([new Date(), namaBarang + " (Approved Owner)", "", stokFisik, ""]); } //[cite: 4]
+    return "Sukses"; //[cite: 4]
+  } catch(e) { return e.toString(); } finally { lock.releaseLock(); }
+}
+
+function ambilInfoStokAyam() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetLog = ss.getSheetByName("Log_Stok_Ayam"); //[cite: 4]
+    var sheetStok = ss.getSheetByName("Stok Barang"); //[cite: 4]
+    var stokFreezer = 0; var stokEtalase = 0; var stokMinyak = 0; //[cite: 4]
+    if (sheetLog && sheetLog.getLastRow() > 1) {
+      var dataLog = sheetLog.getRange(2, 3, sheetLog.getLastRow() - 1, 2).getValues(); //[cite: 4]
+      dataLog.forEach(function(row) { //[cite: 4]
+        var sektor = row[0] ? row[0].toString().trim().toLowerCase() : "";
+        var jumlah = Number(row[1]) || 0;
+        if (sektor === "freezer") stokFreezer += jumlah;
+        else if (sektor === "etalase") stokEtalase += jumlah;
+      }); //[cite: 4]
+    }
+    if (sheetStok && sheetStok.getLastRow() > 1) {
+      var dataBarang = sheetStok.getRange(2, 1, sheetStok.getLastRow() - 1, 2).getValues(); //[cite: 4]
+      for (var i = 0; i < dataBarang.length; i++) { //[cite: 4]
+        if (dataBarang[i][0].toString().trim().toLowerCase() === "minyak goreng") {
+          stokMinyak = Number(dataBarang[i][1]) || 0; //[cite: 4]
+          break;
+        }
+      }
+    }
+    return { stokMentah: Math.max(0, stokFreezer), stokEtalase: Math.max(0, stokEtalase), stokMinyakBaku: stokMinyak }; //[cite: 4]
+  } catch(e) { return { stokMentah: 0, stokEtalase: 0, stokMinyakBaku: 0 }; } //[cite: 4]
+}
+
+function simpanLogOperasional(logData) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000); //[cite: 4]
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetLogStok = ss.getSheetByName("Log_Stok_Ayam"); //[cite: 4]
+    if (!sheetLogStok) return "Error: Tab Log_Stok_Ayam tidak ditemukan!"; //[cite: 4]
+    var parts = logData.tgl.split(',')[0].replace(/-/g, '/').split('/'); //[cite: 4]
+    var tanggalMurni = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); //[cite: 4]
+    var qty = Math.abs(Number(logData.qty)); //[cite: 4]
+    if (logData.jenisAktivitas === "Ayam Masuk") {
+      sheetLogStok.appendRow([tanggalMurni, "Ayam Masuk", "Freezer", qty, logData.keterangan || "Masuk dari Supplier"]); //[cite: 4]
+    } else if (logData.jenisAktivitas === "Goreng Ayam") {
+      sheetLogStok.appendRow([tanggalMurni, "Goreng Ayam (Ambil Mentah)", "Freezer", -qty, logData.keterangan || "Diambil untuk dimasak"]); //[cite: 4]
+      sheetLogStok.appendRow([tanggalMurni, "Goreng Ayam (Matang)", "Etalase", qty, logData.keterangan || "Selesai digoreng"]); //[cite: 4]
+      var qtyMinyak = Number(logData.minyakUsed) || 0;
+      if (qtyMinyak > 0) { //[cite: 4]
+        var sheetStok = ss.getSheetByName("Stok Barang"); //[cite: 4]
+        if (sheetStok) { //[cite: 4]
+          var lastRow = sheetStok.getLastRow();
+          var data = sheetStok.getRange(2, 1, lastRow - 1, 2).getValues(); //[cite: 4]
+          for (var i = 0; i < data.length; i++) {
+            if (data[i][0].toString().trim().toLowerCase() === "minyak goreng") {
+              var sLama = Number(data[i][1]) || 0; //[cite: 4]
+              sheetStok.getRange(i + 2, 2).setValue(Math.max(0, sLama - qtyMinyak)); //[cite: 4]
+              break;
+            }
+          }
+        }
+      }
+    } else if (logData.jenisAktivitas === "Ayam Waste") {
+      sheetLogStok.appendRow([tanggalMurni, "Ayam Rusak / Waste", "Etalase", -qty, logData.keterangan || "Waste Dapur"]); //[cite: 4]
+    }
+    return "Sukses"; //[cite: 4]
+  } catch(e) { return e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+function ambilStokBarang() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Stok Barang"); //[cite: 4]
+    var lastRow = getRealLastRow(sheet); //[cite: 4]
+    if (lastRow < 2) return [];
+    return sheet.getRange(2, 1, lastRow - 1, 2).getValues().map(function(r) { //[cite: 4]
+      return { nama: r[0].toString().trim(), stok: Number(r[1]) || 0 };
+    }); //[cite: 4]
+  } catch(e) { return []; } //[cite: 4]
+}
+
+function simpanPengeluaranToko(logData) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    var ss = SpreadsheetApp.getActiveSpreadsheet(); //[cite: 4]
+    var sheet = ss.getSheetByName("Pengeluaran"); //[cite: 4]
+    var parts = logData.tgl.split(',')[0].replace(/-/g, '/').split('/');
+    var tanggalMurni = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); //[cite: 4]
+    sheet.appendRow([tanggalMurni, logData.jenisKas, logData.namaItem, logData.nominal, logData.keterangan]); //[cite: 4]
+    return "Sukses";
+  } catch(e) { return e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+function simpanLaporanTutupTokoGSheet(rekapData) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000); //[cite: 4]
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Laporan Tutup Toko"); //[cite: 4]
+    var parts = rekapData.tanggal.split('/');
+    var tanggalMurni = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10)); //[cite: 4]
+    sheet.appendRow([tanggalMurni, rekapData.modalAwal, rekapData.cashAyam, rekapData.qrisAyam, rekapData.cashMamah, rekapData.qrisMamah, rekapData.belanja, rekapData.tarikTunai, rekapData.wajibCashLaci]); //[cite: 4]
+    return "Sukses Kirim Laporan ke GSheet!";
+  } catch(e) { return e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+function batalkanTransaksiTerakhir(pinInput) {
+  var PIN_OWNER = "1234"; //[cite: 4]
+  if (pinInput !== PIN_OWNER) return "Gagal: PIN Admin Salah!"; //[cite: 4]
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    var ss = SpreadsheetApp.getActiveSpreadsheet(); //[cite: 4]
+    var waktuSekarang = new Date();
+    var targetWaktuTerakhir = "";
+    var totalItemVoid = 0;
+    
+    var sheetAyam = ss.getSheetByName("Transaksi"); //[cite: 4]
+    var lastRowAyam = getRealLastRow(sheetAyam); //[cite: 4]
+    var sheetMamah = ss.getSheetByName("Transaksi Mamah"); //[cite: 4]
+    var lastRowMamah = getRealLastRow(sheetMamah); //[cite: 4]
+    var sheetLogStok = ss.getSheetByName("Log_Stok_Ayam"); //[cite: 4]
+    
+    if (lastRowAyam >= 2) {
+      targetWaktuTerakhir = sheetAyam.getRange(lastRowAyam, 1).getValue().toString().trim(); //[cite: 4]
+    }
+    if (lastRowMamah >= 2 && targetWaktuTerakhir === "") {
+      targetWaktuTerakhir = sheetMamah.getRange(lastRowMamah, 1).getValue().toString().trim(); //[cite: 4]
+    }
+    
+    if (targetWaktuTerakhir === "") {
+      return "Peringatan: Tidak ada data transaksi yang dapat ditemukan."; //[cite: 4]
+    }
+    
+    if (lastRowAyam >= 2) {
+      var dataAyam = sheetAyam.getRange(2, 1, lastRowAyam - 1, 10).getValues(); //[cite: 4]
+      for (var i = dataAyam.length - 1; i >= 0; i--) { //[cite: 4]
+        if (dataAyam[i][0].toString().trim() === targetWaktuTerakhir && dataAyam[i][9] !== "VOID") {
+          var rNum = i + 2;
+          var namaItem = dataAyam[i][1].toString(); //[cite: 4]
+          var qtyLama = Number(dataAyam[i][2]) || 0; //[cite: 4]
+          
+          sheetAyam.getRange(rNum, 10).setValue("VOID"); //[cite: 4]
+          sheetAyam.getRange(rNum, 3).setValue(0); //[cite: 4]
+          totalItemVoid++; //[cite: 4]
+          if (qtyLama > 0 && (namaItem.toLowerCase().indexOf("ayam") !== -1 || namaItem.toLowerCase().indexOf("geprek") !== -1)) { //[cite: 4]
+            if (sheetLogStok) {
+              sheetLogStok.appendRow([waktuSekarang, "Void Struk (Batal)", "Etalase", Math.abs(qtyLama), "Kembali Struk: " + namaItem]); //[cite: 4]
+            }
+          }
+        }
+      }
+    }
+    
+    if (lastRowMamah >= 2) {
+      var dataMamah = sheetMamah.getRange(2, 1, lastRowMamah - 1, 10).getValues(); //[cite: 4]
+      for (var j = dataMamah.length - 1; j >= 0; j--) { //[cite: 4]
+        if (dataMamah[j][0].toString().trim() === targetWaktuTerakhir && dataMamah[j][9] !== "VOID") {
+          var rNumM = j + 2;
+          sheetMamah.getRange(rNumM, 10).setValue("VOID"); //[cite: 4]
+          sheetMamah.getRange(rNumM, 3).setValue(0); //[cite: 4]
+          totalItemVoid++; //[cite: 4]
+        }
+      }
+    }
+    
+    if (totalItemVoid === 0) {
+      return "Peringatan: Struk transaksi terakhir sudah berstatus VOID sebelumnya."; //[cite: 4]
+    }
+    return "Sukses! 1 Struk Belanja Penuh Berhasil Di-VOID (Total: " + totalItemVoid + " Item Produk)."; //[cite: 4]
+  } catch(e) { return "Error: " + e.toString(); } finally { lock.releaseLock(); } //[cite: 4]
+}
+
+/**
+ * Menyimpan data gambar produk berformat Base64 langsung ke folder Google Drive
+ * dan menuliskan URL barunya ke database spreadsheet menu produk.
+ */
+function uploadGambarMenu(base64Str, fileName, itemName) {
+  try {
+    // 1. Ekstraksi data murni base64
+    var splitData = base64Str.split(',');
+    var contentType = splitData[0].match(/:(.*?);/)[1];
+    var rawBase64 = splitData[1];
+    var byteCharacters = Utilities.base64Decode(rawBase64);
+    var blob = Utilities.newBlob(byteCharacters, contentType, "produk_" + itemName + "_" + fileName);
+    
+    // 2. Simpan berkas gambar ke Google Drive (Default root atau buat folder khusus POS)
+    var file = DriveApp.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var targetImageUrl = "https://lh3.googleusercontent.com/d/" + file.getId(); // Direct download link layout
+    
+    // 3. Cari baris nama item di Google Sheets database menu Anda
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetMenu = ss.getSheetByName("Daftar Menu"); // Sesuaikan nama sheet database menu Anda
+    var dataRange = sheetMenu.getDataRange().getValues();
+    
+    var ditemukan = false;
+    for (var i = 1; i < dataRange.length; i++) {
+      if (dataRange[i][1].toString().toLowerCase() === itemName.toLowerCase()) { // Asumsi Nama Menu di Kolom B (index 1)
+        sheetMenu.getRange(i + 1, 4).setValue(targetImageUrl); // Asumsi Image URL ditulis di Kolom D (index 4)
+        ditemukan = true;
+        break;
+      }
+    }
+    
+    if (ditemukan) {
+      return { status: "Sukses", url: targetImageUrl };
+    } else {
+      return { status: "Gagal", error: "Item menu tidak ditemukan di database sheet." };
+    }
+  } catch (err) {
+    return { status: "Gagal", error: err.toString() };
+  }
+}
